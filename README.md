@@ -120,7 +120,7 @@ nodes:
 ```
 
 ```bash
-kind create cluster --name flask-mongo
+kind create cluster --name flask-mongo --config kind-config.yaml
 ```
 
 > **Why port mapping?** Kind runs Kubernetes inside Docker containers. Without `extraPortMappings`, the NodePort is only accessible inside the Docker network — not from your Mac's browser. This config maps port 30080 from the kind worker container to `localhost:30080` on your host machine.
