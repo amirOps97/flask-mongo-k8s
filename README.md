@@ -88,11 +88,11 @@ flask-mongo-k8s/
 ├── Dockerfile                      # Container image definition
 ├── .dockerignore                   # Files excluded from Docker build
 ├── Jenkinsfile                     # CI/CD pipeline definition
-├── flask-k8s-manifest/
+├── k8s-flask-manifest/
 │   ├── 01-flask-cm.yaml           # Flask app configuration (MongoDB host, DB name)
 │   ├── 02-flask-deploy.yaml       # Flask app Deployment
 │   └── 03-flask-svc.yaml          # Flask app NodePort Service
-└── mongodb-k8s-manifest/
+└── k8s-mongodb-manifest/
     ├── 01-mongodb-secret.yaml         # MongoDB credentials
     ├── 02-mongodb-headless-svc.yaml   # Headless Service for StatefulSet DNS
     ├── 03-mongodb-sts.yaml            # MongoDB 3-node replica set
@@ -115,7 +115,7 @@ kind create cluster --name flask-mongo
 Create the MongoDB root credentials:
 
 ```bash
-kubectl apply -f mongodb-k8s-manifest/01-secret.yaml
+kubectl apply -f k8s-mongodb-manifest/mongodb-secret.yaml
 ```
 
 Generate the keyFile for replica set internal authentication and store it as a secret:
@@ -131,8 +131,8 @@ rm mongo-keyfile
 ### 3. Deploy MongoDB Replica Set
 
 ```bash
-kubectl apply -f mongodb-k8s-manifest/02-mongodb-headless-svc.yaml
-kubectl apply -f mongodb-k8s-manifest/03-mongodb-sts.yaml
+kubectl apply -f k8s-mongodb-manifest/mongodb-headless-svc.yaml
+kubectl apply -f k8s-mongodb-manifest/mongodb-sts.yaml
 ```
 
 Wait for all three pods to be running:
@@ -188,10 +188,10 @@ docker build -t DOCKERHUB_USERNAME/flask-mongo-app:1 .
 docker push DOCKERHUB_USERNAME/flask-mongo-app:1
 ```
 
-Update the image name in `k8s/flask-deploy.yaml.yaml`, then deploy:
+Update the image name in `k8s-flask-manifest/flask-deploy.yaml`, then deploy:
 
 ```bash
-kubectl apply -f k8s/flask-deploy.yaml
+kubectl apply -f k8s-flask-manifest/
 ```
 
 ### 7. Test the API
@@ -467,6 +467,7 @@ Planned improvements to make this more production-ready:
 - [ ] **Ingress controller** — Replace NodePort with proper HTTP routing
 - [ ] **Namespaces** — Separate database and application workloads
 - [ ] **Resource limits** — CPU and memory requests/limits on all pods
+- [ ] **External Secrets Operator** — Fetch secrets from HashiCorp Vault or AWS Secrets Manager instead of storing them in manifests
 - [ ] **Prometheus + Grafana** — Monitoring and alerting
 - [ ] **ArgoCD** — GitOps-based deployment instead of direct kubectl from CI
 
