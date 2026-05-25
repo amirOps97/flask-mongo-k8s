@@ -89,13 +89,13 @@ flask-mongo-k8s/
 ├── .dockerignore                   # Files excluded from Docker build
 ├── Jenkinsfile                     # CI/CD pipeline definition
 ├── k8s-flask-manifest/
-│   ├── 01-flask-cm.yaml           # Flask app configuration (MongoDB host, DB name)
-│   ├── 02-flask-deploy.yaml       # Flask app Deployment
-│   └── 03-flask-svc.yaml          # Flask app NodePort Service
+│   ├── flask-cm.yaml           # Flask app configuration (MongoDB host, DB name)
+│   ├── flask-deploy.yaml       # Flask app Deployment
+│   └── flask-svc.yaml          # Flask app NodePort Service
 └── k8s-mongodb-manifest/
-    ├── 01-mongodb-secret.yaml         # MongoDB credentials
-    ├── 02-mongodb-headless-svc.yaml   # Headless Service for StatefulSet DNS
-    ├── 03-mongodb-sts.yaml            # MongoDB 3-node replica set
+    ├── mongodb-secret.yaml         # MongoDB credentials
+    ├── mongodb-headless-svc.yaml   # Headless Service for StatefulSet DNS
+    ├── mongodb-sts.yaml            # MongoDB 3-node replica set
 ```
 
 ---
@@ -472,25 +472,6 @@ Planned improvements to make this more production-ready:
 - [ ] **ArgoCD** — GitOps-based deployment instead of direct kubectl from CI
 
 ---
-
-┌──────────────────────────────────────────────┐
-                            │              Kubernetes Cluster               │
-                            │                                              │
-  ┌──────────┐    NodePort  │   ┌─────────────┐     Headless Service      │
-  │  Browser  │────30080────│──▶│  Flask App   │──────mongo-svc───────┐   │
-  └──────────┘              │   │ (Deployment) │                      │   │
-                            │   └─────────────┘                      ▼   │
-                            │                        ┌────────────────┐  │
-                            │                        │  mongo-0 (P)   │  │
-                            │                        │  mongo-1 (S)   │  │
-                            │                        │  mongo-2 (S)   │  │
-                            │                        │ (StatefulSet)  │  │
-                            │                        └────────────────┘  │
-                            └──────────────────────────────────────────────┘
-
-  P = Primary (handles reads + writes)
-  S = Secondary (handles reads, replicates from primary)
-
 
 ## License
 
