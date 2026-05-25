@@ -55,7 +55,6 @@ Built as a hands-on DevOps learning project, every design decision is documented
   - [Swagger and Flasgger: API Documentation](#swagger-and-flasgger-api-documentation)
 - [CI/CD with Jenkins](#cicd-with-jenkins)
 - [API Endpoints](#api-endpoints)
-- [Cleanup](#cleanup)
 
 ---
 
