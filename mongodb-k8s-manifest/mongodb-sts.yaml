@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo
+spec:
+  serviceName: mongo-svc
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mongo
+  template:
+    metadata:
+      labels:
+        app: mongo
+    spec:
+      initContainers:
+        - name: fix-keyfile-permissions
+          image: busybox
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              cp /keyfile-secret/mongo-keyfile /keyfile/mongo-keyfile
+              chmod 400 /keyfile/mongo-keyfile
+              chown 999:999 /keyfile/mongo-keyfile
+          volumeMounts:
+            - name: mongo-keyfile-secret
+              mountPath: /keyfile-secret
+              readOnly: true
+            - name: mongo-keyfile
+              mountPath: /keyfile
+      containers:
+        - name: mongo
+          image: mongo:7
+          ports:
+            - containerPort: 27017
+          args: ["--replSet", "rs0", "--bind_ip_all", "--keyFile", "/keyfile/mongo-keyfile"]
+          env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: mongo-secret
+                  key: mongo-root-username
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mongo-secret
+                  key: mongo-root-password
+          volumeMounts:
+            - name: mongo-data
+              mountPath: /data/db
+            - name: mongo-keyfile
+              mountPath: /keyfile
+              readOnly: true
+      volumes:
+        - name: mongo-keyfile-secret
+          secret:
+            secretName: mongo-keyfile-secret
+        - name: mongo-keyfile
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: mongo-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
