@@ -114,7 +114,7 @@ nodes:
   - role: worker
     extraPortMappings:
       - containerPort: 30080       # NodePort for Flask app
-        hostPort: 30080            # maps to localhost:30080 on your Mac
+        hostPort: 30080            # maps to localhost:30080 on your machine
         protocol: TCP
 ```
 
