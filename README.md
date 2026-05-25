@@ -1,4 +1,3 @@
-# flask-mongo-k8s
 # Flask + MongoDB Replica Set on Kubernetes
 
 A production-style deployment of a Python Flask CRUD API backed by a MongoDB replica set, running on Kubernetes. This project covers the full lifecycle: containerization, orchestration, API documentation, and CI/CD with Jenkins.
@@ -10,20 +9,21 @@ Built as a hands-on DevOps learning project, every design decision is documented
 ## Architecture
 
 ```
-                            ┌──────────────────────────────────────────────┐
-                            │              Kubernetes Cluster               │
-                            │                                              │
-  ┌──────────┐    NodePort  │   ┌─────────────┐     Headless Service      │
-  │  Browser  │────30050────│──▶│  Flask App   │──────mongo-svc───────┐   │
-  └──────────┘              │   │ (Deployment) │                      │   │
-                            │   └─────────────┘                      ▼   │
-  ┌──────────┐    NodePort  │   ┌───────────────┐    ┌────────────────┐  │
-  │  Browser  │────30081────│──▶│ Mongo Express │───▶│  mongo-0 (P)   │  │
-  └──────────┘              │   │ (Deployment)  │    │  mongo-1 (S)   │  │
-                            │   └───────────────┘    │  mongo-2 (S)   │  │
+                            ┌────────────────────────────────────────────
+                            │              Kubernetes Cluster            │  
+                            │                                            │ 
+  ┌──────────┐    NodePort  │   ┌─────────────┐     Headless Service     │  
+  │  Browser |────30080──── │──▶│  Flask App  |──────mongo-svc──────-    │ 
+  └──────────┘              │   │ (Deployment)|                     │    |
+                            │   └─────────────┘                     ▼    │
+                            │                        ┌────────────────┐  │
+                            │                        │  mongo-0 (P)   │  │
+                            │                        │  mongo-1 (S)   │  │
+                            │                        │  mongo-2 (S)   │  │
                             │                        │ (StatefulSet)  │  │
                             │                        └────────────────┘  │
-                            └──────────────────────────────────────────────┘
+                            └──────────────────────────────────────────── 
+
 
   P = Primary (handles reads + writes)
   S = Secondary (handles reads, replicates from primary)
@@ -61,21 +61,19 @@ Built as a hands-on DevOps learning project, every design decision is documented
 
 ## Concepts Covered
 
-- **Kubernetes**: StatefulSet, Deployment, Headless Service, NodePort, ConfigMap, Secret, InitContainer, PersistentVolumeClaim, rolling updates
-- **MongoDB**: Replica set, primary/secondary architecture, keyFile authentication, `rs.initiate()`, `authSource`
-- **Docker**: Multi-layer builds, `.dockerignore`, overriding ENTRYPOINT/CMD
-- **Flask**: REST API, CRUD operations, pymongo driver, input validation
+- **Kubernetes**: StatefulSet, Deployment, Headless Service, NodePort, ConfigMap, Secret, InitContainer, Volumes (PV, PVC, Storage Class, EmptyDir), rolling updates
+- **MongoDB**: Replica set, primary/secondary architecture, keyFile authentication
+- **Docker**
+- **Flask**: REST API, CRUD operations, pymongo driver, Flasgger
 - **Swagger/OpenAPI**: API documentation with Flasgger, YAML docstrings
-- **CI/CD**: Jenkins declarative pipeline, Docker Hub integration, automated deployment
-- **Networking**: DNS resolution in Kubernetes, how MongoDB drivers discover replica set topology
-
+- **CI/CD**: Jenkins declarative pipeline (PaC)
 ---
 
 ## Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
-- [kind](https://kind.sigs.k8s.io/docs/user/quick-start/) or [minikube](https://minikube.sigs.k8s.io/docs/start/)
+- [kind](https://kind.sigs.k8s.io/docs/user/quick-start/)
 - A [Docker Hub](https://hub.docker.com/) account
 - [Jenkins](https://www.jenkins.io/doc/book/installing/) (for CI/CD, optional)
 
@@ -85,21 +83,19 @@ Built as a hands-on DevOps learning project, every design decision is documented
 
 ```
 flask-mongo-k8s/
-├── app.py                          # Flask application with CRUD endpoints
+├── App.py                          # Flask application with CRUD endpoints
 ├── requirements.txt                # Python dependencies
 ├── Dockerfile                      # Container image definition
 ├── .dockerignore                   # Files excluded from Docker build
 ├── Jenkinsfile                     # CI/CD pipeline definition
-├── k8s/
-│   ├── 01-configmap.yaml           # Flask app configuration (MongoDB host, DB name)
-│   ├── 02-deployment.yaml          # Flask app Deployment
-│   └── 03-service.yaml             # Flask app NodePort Service
-└── mongo/
-    ├── 01-secret.yaml              # MongoDB credentials
-    ├── 02-mongo-headless-svc.yaml  # Headless Service for StatefulSet DNS
-    ├── 03-mongo-statefulset.yaml   # MongoDB 3-node replica set
-    ├── 04-mongo-express-deployment.yaml  # Mongo Express web UI
-    └── 05-mongo-express-svc.yaml   # Mongo Express NodePort Service
+├── flask-k8s-manifest/
+│   ├── 01-flask-cm.yaml           # Flask app configuration (MongoDB host, DB name)
+│   ├── 02-flask-deploy.yaml       # Flask app Deployment
+│   └── 03-flask-svc.yaml          # Flask app NodePort Service
+└── mongodb-k8s-manifest/
+    ├── 01-mongodb-secret.yaml         # MongoDB credentials
+    ├── 02-mongodb-headless-svc.yaml   # Headless Service for StatefulSet DNS
+    ├── 03-mongodb-sts.yaml            # MongoDB 3-node replica set
 ```
 
 ---
@@ -114,18 +110,12 @@ If using kind:
 kind create cluster --name flask-mongo
 ```
 
-If using minikube:
-
-```bash
-minikube start
-```
-
 ### 2. Create Secrets
 
 Create the MongoDB root credentials:
 
 ```bash
-kubectl apply -f mongo/01-secret.yaml
+kubectl apply -f mongodb-k8s-manifest/01-secret.yaml
 ```
 
 Generate the keyFile for replica set internal authentication and store it as a secret:
@@ -141,8 +131,8 @@ rm mongo-keyfile
 ### 3. Deploy MongoDB Replica Set
 
 ```bash
-kubectl apply -f mongo/02-mongo-headless-svc.yaml
-kubectl apply -f mongo/03-mongo-statefulset.yaml
+kubectl apply -f mongodb-k8s-manifest/02-mongodb-headless-svc.yaml
+kubectl apply -f mongodb-k8s-manifest/03-mongodb-sts.yaml
 ```
 
 Wait for all three pods to be running:
@@ -188,37 +178,29 @@ kubectl exec -it mongo-0 -- mongosh -u admin -p password123 --eval 'rs.status()'
 
 You should see one member as `PRIMARY` and two as `SECONDARY`.
 
-### 5. Deploy Mongo Express
-
-```bash
-kubectl apply -f mongo/04-mongo-express-deployment.yaml
-kubectl apply -f mongo/05-mongo-express-svc.yaml
-```
-
-Access the Mongo Express web UI at `http://<node-ip>:30081`.
 
 ### 6. Build and Deploy the Flask App
 
 Build and push the Docker image:
 
 ```bash
-docker build -t YOUR_DOCKERHUB_USERNAME/flask-mongo-app:1 .
-docker push YOUR_DOCKERHUB_USERNAME/flask-mongo-app:1
+docker build -t DOCKERHUB_USERNAME/flask-mongo-app:1 .
+docker push DOCKERHUB_USERNAME/flask-mongo-app:1
 ```
 
-Update the image name in `k8s/02-deployment.yaml`, then deploy:
+Update the image name in `k8s/flask-deploy.yaml.yaml`, then deploy:
 
 ```bash
-kubectl apply -f k8s/
+kubectl apply -f k8s/flask-deploy.yaml
 ```
 
 ### 7. Test the API
 
-Open Swagger UI at `http://<node-ip>:30050/apidocs` or use curl:
+Open Swagger UI at `http://<node-ip>:30080/apidocs` or use curl:
 
 ```bash
 # Health check
-curl http://<node-ip>:30050/health
+curl http://<node-ip>:30080/health
 
 # Create a product
 curl -X POST http://<node-ip>:30050/api/products \
@@ -226,18 +208,18 @@ curl -X POST http://<node-ip>:30050/api/products \
   -d '{"name": "Laptop", "description": "Gaming laptop 16GB RAM", "price": 999.99}'
 
 # Get all products
-curl http://<node-ip>:30050/api/products
+curl http://<node-ip>:30080/api/products
 
 # Get one product
-curl http://<node-ip>:30050/api/products/<id>
+curl http://<node-ip>:30080/api/products/<id>
 
 # Update a product
-curl -X PUT http://<node-ip>:30050/api/products/<id> \
+curl -X PUT http://<node-ip>:30080/api/products/<id> \
   -H "Content-Type: application/json" \
   -d '{"price": 799.99}'
 
 # Delete a product
-curl -X DELETE http://<node-ip>:30050/api/products/<id>
+curl -X DELETE http://<node-ip>:30080/api/products/<id>
 ```
 
 ---
@@ -250,7 +232,7 @@ A Deployment treats all pods as identical and interchangeable — if one dies, a
 
 MongoDB needs three guarantees that only a StatefulSet provides:
 
-1. **Stable network identity** — Each pod gets a predictable hostname (`mongo-0`, `mongo-1`, `mongo-2`) that doesn't change across restarts. The replica set members use these hostnames to find each other. If `mongo-1` restarted and came back as `mongo-xyz`, the other members wouldn't recognize it.
+1. **Stable network identity** — Each pod gets a predictable hostname (`mongo-0`, `mongo-1`, `mongo-2`) that doesn't change across restarts. The replica set members use these hostnames to find each other. If `mongo-1` restarted and came back as `mongo-xyz`, the other member
 
 2. **Stable persistent storage** — Each pod gets its own PersistentVolumeClaim that follows it across restarts and rescheduling. If `mongo-0` is rescheduled to a different node, its data volume moves with it. In a Deployment, you'd lose the data.
 
@@ -268,7 +250,7 @@ mongo-1.mongo-svc.default.svc.cluster.local
 mongo-2.mongo-svc.default.svc.cluster.local
 ```
 
-This is how the MongoDB driver (and Mongo Express) can address each replica set member individually. The headless Service is the glue between Kubernetes networking and MongoDB's replica set protocol.
+This is how the MongoDB driver can address each replica set member individually. The headless Service is the glue between Kubernetes networking and MongoDB's replica set protocol.
 
 ### KeyFile Authentication Between Replica Set Members
 
@@ -286,7 +268,7 @@ This was the trickiest part of the deployment. Here's the problem:
 
 When Kubernetes mounts a Secret as a volume, the files are always owned by `root:root`. You can set the `defaultMode` (file permissions), but you **cannot** set the owner. MongoDB (UID 999) needs to own the file with mode `0400`.
 
-We tried several approaches:
+We tried several approaches using Security Context:
 
 | Approach | Result |
 |----------|--------|
@@ -313,6 +295,29 @@ The InitContainer copies the keyFile from the Secret volume to an `emptyDir` vol
 
 The `emptyDir` survives after the InitContainer terminates because it's tied to the **pod's** lifecycle, not any individual container's. It's only deleted when the pod itself is deleted.
 
+
+### Overriding ENTRYPOINT and CMD with command and args
+
+Understanding what `command` and `args` do:
+
+- `command` overrides the Docker image's `ENTRYPOINT`
+- `args` overrides the Docker image's `CMD`
+
+By setting `command` to `/bin/sh -c`, we get a shell that can do `${VAR}` expansion. The shell reads the Secret values (already injected as environment variables), builds the full connection string, and then `exec node app` starts Mongo Express.
+
+
+**Caution**: Overriding `command` bypasses the original Docker image's entrypoint script. If that script does important setup (creating directories, initializing configs), you'll break things. For Mongo Express it's fine because the entrypoint simply runs `node app`. For images with complex entrypoints (like Postgres or MySQL), you should call the original entrypoint explicitly: `exec docker-entrypoint.sh mongod --args`.
+
+For the Flask app deployment, we used a cleaner approach — Kubernetes `$(VAR)` substitution:
+
+```yaml
+- name: MONGO_URI
+  value: "mongodb://$(MONGO_USER):$(MONGO_PASS)@$(MONGO_HOST)/$(MONGO_DATABASE)?replicaSet=$(MONGO_REPLICA_SET)&authSource=$(MONGO_AUTH_SOURCE)"
+```
+
+This is not shell interpolation — it's resolved by the Kubernetes API server before the container starts. `$(VAR_NAME)` references env vars defined earlier in the same spec. No shell override needed, and the original image entrypoint runs untouched.
+
+
 ### How the MongoDB Driver Routes Writes to the Primary
 
 A common question: if you list all three MongoDB nodes in the connection string, how does the driver know which one is the primary?
@@ -333,37 +338,6 @@ These are **seed nodes**, not destinations. The driver doesn't blindly send quer
 
 So the intelligence lives in the **MongoDB driver** (pymongo in our case), not in Kubernetes DNS or the Service. Kubernetes just provides the network plumbing — the driver handles routing.
 
-### Overriding ENTRYPOINT and CMD with command and args
-
-In the Mongo Express deployment, we need to build the MongoDB connection string from Secret values at runtime. Kubernetes doesn't support string interpolation inside `env` values from Secrets (you can't do `value: "mongodb://$(secretRef)@host"`). So we override the container's startup command:
-
-```yaml
-command: ["/bin/sh", "-c"]
-args:
-  - |
-    export ME_CONFIG_MONGODB_URL="mongodb://${ME_CONFIG_MONGODB_ADMINUSERNAME}:${ME_CONFIG_MONGODB_ADMINPASSWORD}@mongo-0.mongo-svc:27017,mongo-1.mongo-svc:27017,mongo-2.mongo-svc:27017/?replicaSet=rs0"
-    exec node app
-```
-
-Understanding what `command` and `args` do:
-
-- `command` overrides the Docker image's `ENTRYPOINT`
-- `args` overrides the Docker image's `CMD`
-
-By setting `command` to `/bin/sh -c`, we get a shell that can do `${VAR}` expansion. The shell reads the Secret values (already injected as environment variables), builds the full connection string, and then `exec node app` starts Mongo Express.
-
-The `exec` keyword is important — it **replaces** the shell process with the `node` process. Without it, you'd have an unnecessary parent shell process hanging around.
-
-**Caution**: Overriding `command` bypasses the original Docker image's entrypoint script. If that script does important setup (creating directories, initializing configs), you'll break things. For Mongo Express it's fine because the entrypoint simply runs `node app`. For images with complex entrypoints (like Postgres or MySQL), you should call the original entrypoint explicitly: `exec docker-entrypoint.sh mongod --args`.
-
-For the Flask app deployment, we used a cleaner approach — Kubernetes `$(VAR)` substitution:
-
-```yaml
-- name: MONGO_URI
-  value: "mongodb://$(MONGO_USER):$(MONGO_PASS)@$(MONGO_HOST)/$(MONGO_DATABASE)?replicaSet=$(MONGO_REPLICA_SET)&authSource=$(MONGO_AUTH_SOURCE)"
-```
-
-This is not shell interpolation — it's resolved by the Kubernetes API server before the container starts. `$(VAR_NAME)` references env vars defined earlier in the same spec. No shell override needed, and the original image entrypoint runs untouched.
 
 ### Building the Connection String Without Hardcoding Secrets
 
@@ -390,7 +364,7 @@ env:
 
 Order matters — `MONGO_URI` must be defined **after** the variables it references.
 
-**Pattern 2 — Shell expansion (Mongo Express):**
+**Pattern 2 — Shell expansion:**
 
 When Kubernetes substitution isn't flexible enough, a shell startup script builds the string from env vars at runtime.
 
@@ -447,15 +421,6 @@ Code Push → Jenkins detects change → Build Docker image → Push to Docker H
 2. **Push to Docker Hub** — Authenticates with Docker Hub using Jenkins credentials and pushes the image
 3. **Deploy to Kubernetes** — Runs `kubectl set image` to update the running deployment with the new image tag, then waits for the rollout to complete
 
-### Jenkins Setup
-
-1. Install Jenkins: `brew install jenkins-lts && brew services start jenkins-lts`
-2. Open `http://localhost:8080` and complete the setup wizard
-3. Add Docker Hub credentials: **Manage Jenkins → Credentials → Global → Add Credentials**
-   - Kind: Username with password
-   - ID: `dockerhub-creds`
-4. Create a Pipeline job pointing to your GitHub repository
-5. Set Script Path to `Jenkinsfile`
 
 ### Key Design Decisions in the Pipeline
 
@@ -492,32 +457,6 @@ Code Push → Jenkins detects change → Build Docker image → Push to Docker H
 
 ---
 
-## Cleanup
-
-```bash
-# Delete Flask app
-kubectl delete -f k8s/
-
-# Delete Mongo Express
-kubectl delete -f mongo/04-mongo-express-deployment.yaml
-kubectl delete -f mongo/05-mongo-express-svc.yaml
-
-# Delete MongoDB
-kubectl delete -f mongo/03-mongo-statefulset.yaml
-kubectl delete -f mongo/02-mongo-headless-svc.yaml
-kubectl delete -f mongo/01-secret.yaml
-
-# Delete persistent volume claims (data is lost)
-kubectl delete pvc -l app=mongo
-
-# Delete secrets
-kubectl delete secret mongo-keyfile-secret
-
-# Delete the cluster
-kind delete cluster --name flask-mongo
-```
-
----
 
 ## What's Next
 
@@ -535,4 +474,4 @@ Planned improvements to make this more production-ready:
 
 ## License
 
-MIT
+
