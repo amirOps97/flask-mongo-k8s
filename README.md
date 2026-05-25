@@ -473,6 +473,25 @@ Planned improvements to make this more production-ready:
 
 ---
 
+┌──────────────────────────────────────────────┐
+                            │              Kubernetes Cluster               │
+                            │                                              │
+  ┌──────────┐    NodePort  │   ┌─────────────┐     Headless Service      │
+  │  Browser  │────30080────│──▶│  Flask App   │──────mongo-svc───────┐   │
+  └──────────┘              │   │ (Deployment) │                      │   │
+                            │   └─────────────┘                      ▼   │
+                            │                        ┌────────────────┐  │
+                            │                        │  mongo-0 (P)   │  │
+                            │                        │  mongo-1 (S)   │  │
+                            │                        │  mongo-2 (S)   │  │
+                            │                        │ (StatefulSet)  │  │
+                            │                        └────────────────┘  │
+                            └──────────────────────────────────────────────┘
+
+  P = Primary (handles reads + writes)
+  S = Secondary (handles reads, replicates from primary)
+
+
 ## License
 
 
