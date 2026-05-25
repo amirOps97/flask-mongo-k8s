@@ -2,6 +2,7 @@ pipeline {
     agent any
 
     environment {
+        PATH = "/usr/local/bin:/opt/homebrew/bin:${env.PATH}"
         DOCKER_IMAGE = "amirdehdari/flask-mongo-app"
         IMAGE_TAG    = "${BUILD_NUMBER}"
         KUBECONFIG   = "${HOME}/.kube/config"
