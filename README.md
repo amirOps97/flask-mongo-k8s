@@ -104,11 +104,27 @@ flask-mongo-k8s/
 
 ### 1. Create the Kubernetes Cluster
 
-If using kind:
+If using kind, create a config file to map the NodePort to your host:
+
+```yaml
+# kind-config.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+    extraPortMappings:
+      - containerPort: 30080       # NodePort for Flask app
+        hostPort: 30080            # maps to localhost:30080 on your Mac
+        protocol: TCP
+```
 
 ```bash
 kind create cluster --name flask-mongo
 ```
+
+> **Why port mapping?** Kind runs Kubernetes inside Docker containers. Without `extraPortMappings`, the NodePort is only accessible inside the Docker network — not from your Mac's browser. This config maps port 30080 from the kind worker container to `localhost:30080` on your host machine.
+
 
 ### 2. Create Secrets
 
