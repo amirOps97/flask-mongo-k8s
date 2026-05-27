@@ -4,32 +4,31 @@ A production-style deployment of a Python Flask CRUD API backed by a MongoDB rep
 
 Built as a hands-on DevOps learning project, every design decision is documented below — not just *what* was done, but *why*.
 
----
-
-## Architecture
-
 ```
-                            ┌────────────────────────────────────────────
-                            │              Kubernetes Cluster            │  
-                            │                                            │ 
-  ┌──────────┐    NodePort  │   ┌─────────────┐     Headless Service     │  
-  │  Browser |────30080──── │──▶│  Flask App  |──────mongo-svc──────-    │ 
-  └──────────┘              │   │ (Deployment)|                     │    |
-                            │   └─────────────┘                     ▼    │
-                            │                        ┌────────────────┐  │
-                            │                        │  mongo-0 (P)   │  │
-                            │                        │  mongo-1 (S)   │  │
-                            │                        │  mongo-2 (S)   │  │
-                            │                        │ (StatefulSet)  │  │
-                            │                        └────────────────┘  │
-                            └──────────────────────────────────────────── 
-
+                            ┌──────────────────────────────────────────────┐
+                            │              Kubernetes Cluster               │
+                            │                                              │
+                            │  ┌─── namespace: app ──────────────────┐    │
+  ┌──────────┐    NodePort  │  │  ┌─────────────┐                   │    │
+  │  Browser  │────30080────│──│─▶│  Flask App   │                   │    │
+  └──────────┘              │  │  │ (Deployment) │                   │    │
+                            │  │  └──────┬──────┘                   │    │
+                            │  └─────────┼──────────────────────────┘    │
+                            │            │ mongo-0.mongo-svc.database    │
+                            │  ┌─── namespace: database ────────────┐    │
+                            │  │         ▼                          │    │
+                            │  │  ┌────────────────┐               │    │
+                            │  │  │  mongo-0 (P)   │               │    │
+                            │  │  │  mongo-1 (S)   │               │    │
+                            │  │  │  mongo-2 (S)   │               │    │
+                            │  │  │ (StatefulSet)  │               │    │
+                            │  │  └────────────────┘               │    │
+                            │  └────────────────────────────────────┘    │
+                            └──────────────────────────────────────────────┘
 
   P = Primary (handles reads + writes)
   S = Secondary (handles reads, replicates from primary)
 ```
-
----
 
 ## Table of Contents
 
@@ -60,7 +59,7 @@ Built as a hands-on DevOps learning project, every design decision is documented
 
 ## Concepts Covered
 
-- **Kubernetes**: StatefulSet, Deployment, Headless Service, NodePort, ConfigMap, Secret, InitContainer, Volumes (PV, PVC, Storage Class, EmptyDir), rolling updates
+- **Kubernetes**: StatefulSet, Deployment, Headless Service, NodePort, ConfigMap, Secret, InitContainer, Volumes (PV, PVC, Storage Class, EmptyDir), rolling updates, cross-namespace DNS, Namespaces
 - **MongoDB**: Replica set, primary/secondary architecture, keyFile authentication
 - **Docker**
 - **Flask**: REST API, CRUD operations, pymongo driver, Flasgger
@@ -477,10 +476,10 @@ Code Push → Jenkins detects change → Build Docker image → Push to Docker H
 
 Planned improvements to make this more production-ready:
 
-- [X] **Liveness and readiness probes** — Let Kubernetes detect unhealthy pods automatically <DONE!>
+- [X] **Liveness and readiness probes** — Let Kubernetes detect unhealthy pods automatically
 - [ ] **Helm charts** — Package all manifests into a reusable, configurable chart
 - [ ] **Ingress controller** — Replace NodePort with proper HTTP routing
-- [ ] **Namespaces** — Separate database and application workloads
+- [x] **Namespaces** — Separate database and application workloads
 - [ ] **Resource limits** — CPU and memory requests/limits on all pods
 - [ ] **External Secrets Operator** — Fetch secrets from HashiCorp Vault or AWS Secrets Manager instead of storing them in manifests
 - [ ] **Prometheus + Grafana** — Monitoring and alerting
