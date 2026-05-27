@@ -4,39 +4,12 @@ A production-style deployment of a Python Flask CRUD API backed by a MongoDB rep
 
 Built as a hands-on DevOps learning project, every design decision is documented below — not just *what* was done, but *why*.
 
-<<<<<<< HEAD
-```
-                            ┌──────────────────────────────────────────────┐
-                            │              Kubernetes Cluster               │
-                            │                                              │
-                            │  ┌─── namespace: app ──────────────────┐    │
-  ┌──────────┐    NodePort  │  │  ┌─────────────┐                   │    │
-  │  Browser  │────30080────│──│─▶│  Flask App   │                   │    │
-  └──────────┘              │  │  │ (Deployment) │                   │    │
-                            │  │  └──────┬──────┘                   │    │
-                            │  └─────────┼──────────────────────────┘    │
-                            │            │ mongo-0.mongo-svc.database    │
-                            │  ┌─── namespace: database ────────────┐    │
-                            │  │         ▼                          │    │
-                            │  │  ┌────────────────┐               │    │
-                            │  │  │  mongo-0 (P)   │               │    │
-                            │  │  │  mongo-1 (S)   │               │    │
-                            │  │  │  mongo-2 (S)   │               │    │
-                            │  │  │ (StatefulSet)  │               │    │
-                            │  │  └────────────────┘               │    │
-                            │  └────────────────────────────────────┘    │
-                            └──────────────────────────────────────────────┘
 
-  P = Primary (handles reads + writes)
-  S = Secondary (handles reads, replicates from primary)
-```
-=======
 ---
 
 ## Architecture
 
 ![Kubernetes Architecture](images/Image.png)
->>>>>>> 042266b (update readme)
 
 ## Table of Contents
 
