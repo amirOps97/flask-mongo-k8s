@@ -32,7 +32,7 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                sh "kubectl set image deployment/flask-app flask-app=${DOCKER_IMAGE}:${IMAGE_TAG}"
+                sh "kubectl set image deployment/flask-app flask-app=${DOCKER_IMAGE}:${IMAGE_TAG} -n app"
                 sh "kubectl rollout status deployment/flask-app --timeout=60s"
             }
         }

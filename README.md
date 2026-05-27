@@ -4,6 +4,7 @@ A production-style deployment of a Python Flask CRUD API backed by a MongoDB rep
 
 Built as a hands-on DevOps learning project, every design decision is documented below — not just *what* was done, but *why*.
 
+<<<<<<< HEAD
 ```
                             ┌──────────────────────────────────────────────┐
                             │              Kubernetes Cluster               │
@@ -29,6 +30,13 @@ Built as a hands-on DevOps learning project, every design decision is documented
   P = Primary (handles reads + writes)
   S = Secondary (handles reads, replicates from primary)
 ```
+=======
+---
+
+## Architecture
+
+![Kubernetes Architecture](images/Image.png)
+>>>>>>> 042266b (update readme)
 
 ## Table of Contents
 

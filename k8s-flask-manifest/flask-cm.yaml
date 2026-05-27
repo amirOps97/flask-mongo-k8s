@@ -2,8 +2,9 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: flask-app-config
+  namespace: app
 data:
-  MONGO_HOST: "mongo-0.mongo-svc:27017,mongo-1.mongo-svc:27017,mongo-2.mongo-svc:27017"
+  MONGO_HOST: "mongo-0.mongo-svc.database:27017,mongo-1.mongo-svc.database:27017,mongo-2.mongo-svc.database:27017"
   MONGO_DATABASE: "productdb"
   MONGO_REPLICA_SET: "rs0"
   MONGO_AUTH_SOURCE: "admin"
