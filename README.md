@@ -230,9 +230,9 @@ A normal Kubernetes Service gets a single ClusterIP and load-balances traffic ac
 A headless Service (`clusterIP: None`) doesn't get a ClusterIP. Instead, it creates individual DNS records for each pod:
 
 ```
-mongo-0.mongo-svc.default.svc.cluster.local
-mongo-1.mongo-svc.default.svc.cluster.local
-mongo-2.mongo-svc.default.svc.cluster.local
+mongo-0.mongo-svc.default.database.cluster.local
+mongo-1.mongo-svc.default.data ase.cluster.local
+mongo-2.mongo-svc.default.database.cluster.local
 ```
 
 This is how the MongoDB driver can address each replica set member individually. The headless Service is the glue between Kubernetes networking and MongoDB's replica set protocol.
@@ -308,7 +308,7 @@ This is not shell interpolation — it's resolved by the Kubernetes API server b
 A common question: if you list all three MongoDB nodes in the connection string, how does the driver know which one is the primary?
 
 ```
-mongodb://admin:pass@mongo-0:27017,mongo-1:27017,mongo-2:27017/?replicaSet=rs0
+mongodb://admin:pass@mongo-0.mongo-svc.database:27017,mongo-1.mongo-svc.database:27017,mongo-2.mongo-svc.database:27017/?replicaSet=rs0
 ```
 
 These are **seed nodes**, not destinations. The driver doesn't blindly send queries to whichever IP DNS resolves. Here's what actually happens:
