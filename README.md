@@ -477,7 +477,7 @@ Code Push → Jenkins detects change → Build Docker image → Push to Docker H
 
 Planned improvements to make this more production-ready:
 
-- [ ] **Liveness and readiness probes** — Let Kubernetes detect unhealthy pods automatically
+- [X] **Liveness and readiness probes** — Let Kubernetes detect unhealthy pods automatically <DONE!>
 - [ ] **Helm charts** — Package all manifests into a reusable, configurable chart
 - [ ] **Ingress controller** — Replace NodePort with proper HTTP routing
 - [ ] **Namespaces** — Separate database and application workloads

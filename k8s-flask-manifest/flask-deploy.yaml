@@ -17,6 +17,18 @@ spec:
           image: amirdehdari/flask-mongo:2.1.0
           ports:
             - containerPort: 5000
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 5
           env:
             - name: MONGO_USER
               valueFrom:
