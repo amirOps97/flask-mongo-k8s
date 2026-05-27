@@ -392,6 +392,38 @@ The `---` separator is critical — it tells Flasgger "YAML starts here." Withou
 
 ---
 
+### Namespace Separation and Cross-Namespace DNS
+
+This project separates resources into two namespaces: `database` for MongoDB and `app` for the Flask API. This mirrors production environments where database and application workloads are managed independently with different access controls.
+
+When pods communicate within the same namespace, short service names work:
+
+```
+mongo-0.mongo-svc          ← works inside the database namespace
+```
+
+When the Flask app (in the `app` namespace) needs to reach MongoDB (in the `database` namespace), it must include the namespace in the DNS name:
+
+```
+mongo-0.mongo-svc.database
+```
+
+The full FQDN is `mongo-0.mongo-svc.database.svc.cluster.local`, but the short form with just the namespace appended works fine.
+
+This means the ConfigMap must specify cross-namespace hostnames:
+
+```yaml
+MONGO_HOST: "mongo-0.mongo-svc.database:27017,mongo-1.mongo-svc.database:27017,mongo-2.mongo-svc.database:27017"
+```
+
+One caveat: Kubernetes Secrets don't cross namespace boundaries. The Flask app needs MongoDB credentials, but the Secret lives in the `database` namespace. The solution is to maintain a copy of the Secret in the `app` namespace (`k8s/mongodb-secret.yaml`). In production, the External Secrets Operator eliminates this duplication by letting both namespaces pull from the same external source (like HashiCorp Vault).
+
+---
+
+
+
+
+
 ## CI/CD with Jenkins
 
 The project includes a `Jenkinsfile` that automates the build-push-deploy cycle:
