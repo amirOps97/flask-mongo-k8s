@@ -58,26 +58,7 @@ Built as a hands-on DevOps learning project, every design decision is documented
 
 ---
 
-## Project Structure
 
-```
-flask-mongo-k8s/
-├── App.py                          # Flask application with CRUD endpoints
-├── requirements.txt                # Python dependencies
-├── Dockerfile                      # Container image definition
-├── .dockerignore                   # Files excluded from Docker build
-├── Jenkinsfile                     # CI/CD pipeline definition
-├── k8s-flask-manifest/
-│   ├── flask-cm.yaml           # Flask app configuration (MongoDB host, DB name)
-│   ├── flask-deploy.yaml       # Flask app Deployment
-│   └── flask-svc.yaml          # Flask app NodePort Service
-└── k8s-mongodb-manifest/
-    ├── mongodb-secret.yaml         # MongoDB credentials
-    ├── mongodb-headless-svc.yaml   # Headless Service for StatefulSet DNS
-    ├── mongodb-sts.yaml            # MongoDB 3-node replica set
-```
-
----
 
 ## Step-by-Step Setup Guide
 
@@ -103,6 +84,15 @@ kind create cluster --name flask-mongo --config kind-config.yaml
 ```
 
 > **Why port mapping?** Kind runs Kubernetes inside Docker containers. Without `extraPortMappings`, the NodePort is only accessible inside the Docker network — not from your Mac's browser. This config maps port 30080 from the kind worker container to `localhost:30080` on your host machine.
+
+The project uses two namespaces to separate concerns — `database` for MongoDB and `app` for the Flask API:
+
+```bash
+kubectl create namespace database
+kubectl create namespace app
+```
+
+> **Why namespaces?** In production, you wouldn't run your database and application in the same namespace. Namespaces provide resource isolation, access control boundaries, and organizational clarity. They also let different teams manage their own resources independently.
 
 
 ### 2. Create Secrets
@@ -133,7 +123,7 @@ kubectl apply -f k8s-mongodb-manifest/mongodb-sts.yaml
 Wait for all three pods to be running:
 
 ```bash
-kubectl get pods -w
+kubectl get pods -n database -w
 ```
 
 You should see:
@@ -152,13 +142,13 @@ mongo-2   1/1     Running   0          30s
 The three MongoDB pods are running, but they don't know about each other yet. You need to tell them they're a team:
 
 ```bash
-kubectl exec -it mongo-0 -- mongosh -u admin -p password123 --eval '
+kubectl exec -n database -it mongo-0 -- mongosh -u admin -p password123 --eval '
 rs.initiate({
   _id: "rs0",
   members: [
-    { _id: 0, host: "mongo-0.mongo-svc:27017" },
-    { _id: 1, host: "mongo-1.mongo-svc:27017" },
-    { _id: 2, host: "mongo-2.mongo-svc:27017" }
+    { _id: 0, host: "mongo-0.mongo-svc.database:27017" },
+    { _id: 1, host: "mongo-1.mongo-svc.database:27017" },
+    { _id: 2, host: "mongo-2.mongo-svc.database:27017" }
   ]
 })'
 ```
@@ -168,7 +158,7 @@ You should see `{ ok: 1 }`. Run this only on **one pod** — `mongo-0` distribut
 Verify the replica set:
 
 ```bash
-kubectl exec -it mongo-0 -- mongosh -u admin -p password123 --eval 'rs.status()'
+kubectl exec -n database -it mongo-0 -- mongosh -u admin -p password123 --eval 'rs.status()'
 ```
 
 You should see one member as `PRIMARY` and two as `SECONDARY`.
