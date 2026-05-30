@@ -4,12 +4,12 @@ A production-style deployment of a Python Flask CRUD API backed by a MongoDB rep
 
 Built as a hands-on DevOps learning project, every design decision is documented below — not just *what* was done, but *why*.
 
-
 ---
 
 ## Architecture
 
 ![Kubernetes Architecture](images/Image.png)
+---
 
 ## Table of Contents
 
@@ -18,12 +18,14 @@ Built as a hands-on DevOps learning project, every design decision is documented
 - [Project Structure](#project-structure)
 - [Step-by-Step Setup Guide](#step-by-step-setup-guide)
   - [1. Create the Kubernetes Cluster](#1-create-the-kubernetes-cluster)
-  - [2. Create Secrets](#2-create-secrets)
-  - [3. Deploy MongoDB Replica Set](#3-deploy-mongodb-replica-set)
-  - [4. Initialize the Replica Set](#4-initialize-the-replica-set)
-  - [5. Deploy Mongo Express](#5-deploy-mongo-express)
-  - [6. Build and Deploy the Flask App](#6-build-and-deploy-the-flask-app)
-  - [7. Test the API](#7-test-the-api)
+  - [2. Install Nginx Ingress Controller](#2-install-nginx-ingress-controller)
+  - [3. Create Namespaces](#3-create-namespaces)
+  - [4. Create Secrets](#4-create-secrets)
+  - [5. Deploy MongoDB Replica Set](#5-deploy-mongodb-replica-set)
+  - [6. Initialize the Replica Set](#6-initialize-the-replica-set)
+  - [7. Build and Deploy the Flask App](#7-build-and-deploy-the-flask-app)
+  - [8. Create the Ingress Resource](#8-create-the-ingress-resource)
+  - [9. Test the API](#9-test-the-api)
 - [Deep Dive: Design Decisions](#deep-dive-design-decisions)
   - [Why StatefulSet for MongoDB?](#why-statefulset-for-mongodb)
   - [Headless Service and Pod DNS](#headless-service-and-pod-dns)
@@ -33,19 +35,24 @@ Built as a hands-on DevOps learning project, every design decision is documented
   - [Overriding ENTRYPOINT and CMD with command and args](#overriding-entrypoint-and-cmd-with-command-and-args)
   - [Building the Connection String Without Hardcoding Secrets](#building-the-connection-string-without-hardcoding-secrets)
   - [Swagger and Flasgger: API Documentation](#swagger-and-flasgger-api-documentation)
+  - [Namespace Separation and Cross-Namespace DNS](#namespace-separation-and-cross-namespace-dns)
+  - [Ingress: How External Traffic Enters the Cluster](#ingress-how-external-traffic-enters-the-cluster)
 - [CI/CD with Jenkins](#cicd-with-jenkins)
 - [API Endpoints](#api-endpoints)
+- [Cleanup](#cleanup)
 
 ---
 
 ## Concepts Covered
 
-- **Kubernetes**: StatefulSet, Deployment, Headless Service, NodePort, ConfigMap, Secret, InitContainer, Volumes (PV, PVC, Storage Class, EmptyDir), rolling updates, cross-namespace DNS, Namespaces
+- **Kubernetes**: StatefulSet, Deployment, Headless Service, ClusterIP, ConfigMap, Secret, InitContainer, Volumes (PV, PVC, Storage Class, EmptyDir), Namespaces, cross-namespace DNS, Ingress, rolling updates
 - **MongoDB**: Replica set, primary/secondary architecture, keyFile authentication
 - **Docker**
 - **Flask**: REST API, CRUD operations, pymongo driver, Flasgger
 - **Swagger/OpenAPI**: API documentation with Flasgger, YAML docstrings
 - **CI/CD**: Jenkins declarative pipeline (PaC)
+- **Networking**: DNS resolution in Kubernetes, hostNetwork, Ingress controller routing
+
 ---
 
 ## Prerequisites
@@ -59,12 +66,11 @@ Built as a hands-on DevOps learning project, every design decision is documented
 ---
 
 
-
 ## Step-by-Step Setup Guide
 
 ### 1. Create the Kubernetes Cluster
 
-If using kind, create a config file to map the NodePort to your host:
+Create a Kind config that maps port 80 and 443 on the worker node to your host machine. This is needed because the Ingress controller will listen on these ports via `hostNetwork`:
 
 ```yaml
 # kind-config.yaml
@@ -74,8 +80,11 @@ nodes:
   - role: control-plane
   - role: worker
     extraPortMappings:
-      - containerPort: 30080       # NodePort for Flask app
-        hostPort: 30080            # maps to localhost:30080 on your machine
+      - containerPort: 80        # HTTP traffic for Ingress
+        hostPort: 80
+        protocol: TCP
+      - containerPort: 443       # HTTPS traffic for Ingress
+        hostPort: 443
         protocol: TCP
 ```
 
@@ -83,9 +92,49 @@ nodes:
 kind create cluster --name flask-mongo --config kind-config.yaml
 ```
 
-> **Why port mapping?** Kind runs Kubernetes inside Docker containers. Without `extraPortMappings`, the NodePort is only accessible inside the Docker network — not from your Mac's browser. This config maps port 30080 from the kind worker container to `localhost:30080` on your host machine.
+> **Why port mapping on the worker?** Kind runs Kubernetes nodes as Docker containers. The Ingress controller runs on the worker node with `hostNetwork: true`, meaning it binds directly to the node's port 80. The `extraPortMappings` bridges that port from the Docker container to `localhost:80` on your Mac. Without it, port 80 inside the Kind container is unreachable from your browser.
 
-The project uses two namespaces to separate concerns — `database` for MongoDB and `app` for the Flask API:
+### 2. Install Nginx Ingress Controller
+
+The standard Kind ingress manifest needs two modifications for our setup. Download it, apply the patches, then install:
+
+```bash
+# Download the manifest
+curl -sL https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.10.1/deploy/static/provider/kind/deploy.yaml -o ingress-nginx.yaml
+```
+
+Make an edit in `ingress-nginx.yaml` — find the `ingress-nginx-controller` Deployment's pod spec:
+
+**Edit** — Remove `ingress-ready: "true"` from `nodeSelector` and add `hostNetwork: true`:
+
+```yaml
+      hostNetwork: true          # <-- add this
+      nodeSelector:
+        kubernetes.io/os: linux  # <-- remove the ingress-ready line, keep only this
+```
+
+Apply and wait for it to be ready:
+
+```bash
+kubectl apply -f ingress-nginx.yaml
+
+kubectl wait --namespace ingress-nginx \
+  --for=condition=ready pod \
+  --selector=app.kubernetes.io/component=controller \
+  --timeout=90s
+```
+
+Verify the controller is running on the worker node:
+
+```bash
+kubectl get pods -n ingress-nginx -o wide
+```
+
+You should see the controller pod on `flask-mongo-worker` with an IP like `172.18.x.x` (the node's IP, not a pod network IP — confirming `hostNetwork` is active).
+
+> **Why `hostNetwork: true`?** Normally, pods get their own IP in the pod network (10.244.x.x) and need a Service to be reachable. With `hostNetwork: true`, the pod shares the node's network namespace — port 80 on the pod IS port 80 on the node. This eliminates the need for a LoadBalancer service (which requires a cloud provider or MetalLB) and works perfectly with Kind's port mapping.
+
+### 3. Create Namespaces
 
 ```bash
 kubectl create namespace database
@@ -94,30 +143,29 @@ kubectl create namespace app
 
 > **Why namespaces?** In production, you wouldn't run your database and application in the same namespace. Namespaces provide resource isolation, access control boundaries, and organizational clarity. They also let different teams manage their own resources independently.
 
+### 4. Create Secrets
 
-### 2. Create Secrets
-
-Create the MongoDB root credentials:
+Create the MongoDB root credentials in both namespaces. The `database` namespace needs them for MongoDB itself, and the `app` namespace needs them for the Flask app's connection string. Kubernetes Secrets can't be shared across namespaces, so both need a copy:
 
 ```bash
 kubectl apply -f k8s-mongodb-manifest/mongodb-secret.yaml
+kubectl apply -f k8s-flask-manifest/mongodb-secret.yaml
 ```
 
-Generate the keyFile for replica set internal authentication and store it as a secret:
+Generate the keyFile for replica set internal authentication:
 
 ```bash
 openssl rand -base64 756 > mongo-keyfile
-kubectl create secret generic mongo-keyfile-secret --from-file=mongo-keyfile
+kubectl create secret generic mongo-keyfile-secret --from-file=mongo-keyfile -n database
 rm mongo-keyfile
 ```
 
 > **Why a keyFile?** When MongoDB runs as a replica set with authentication enabled, the members need to prove to each other that they belong to the same cluster. The keyFile is a shared secret — every member has the same key, and they use it to authenticate inter-node communication. Without it, any rogue MongoDB instance could join your replica set.
 
-### 3. Deploy MongoDB Replica Set
+### 5. Deploy MongoDB Replica Set
 
 ```bash
-kubectl apply -f k8s-mongodb-manifest/mongodb-headless-svc.yaml
-kubectl apply -f k8s-mongodb-manifest/mongodb-sts.yaml
+kubectl apply -f k8s-mongodb-manifest/
 ```
 
 Wait for all three pods to be running:
@@ -137,7 +185,7 @@ mongo-2   1/1     Running   0          30s
 
 > **Note:** The pods start in order — `mongo-0` first, then `mongo-1`, then `mongo-2`. This is a StatefulSet behavior. Each pod waits for the previous one to be ready before starting. This ordered startup is important for databases.
 
-### 4. Initialize the Replica Set
+### 6. Initialize the Replica Set
 
 The three MongoDB pods are running, but they don't know about each other yet. You need to tell them they're a team:
 
@@ -163,14 +211,13 @@ kubectl exec -n database -it mongo-0 -- mongosh -u admin -p password123 --eval '
 
 You should see one member as `PRIMARY` and two as `SECONDARY`.
 
-
-### 6. Build and Deploy the Flask App
+### 7. Build and Deploy the Flask App
 
 Build and push the Docker image:
 
 ```bash
-docker build -t DOCKERHUB_USERNAME/flask-mongo-app:1 .
-docker push DOCKERHUB_USERNAME/flask-mongo-app:1
+docker build -t YOUR_DOCKERHUB_USERNAME/flask-mongo-app:1 .
+docker push YOUR_DOCKERHUB_USERNAME/flask-mongo-app:1
 ```
 
 Update the image name in `k8s-flask-manifest/flask-deploy.yaml`, then deploy:
@@ -179,32 +226,76 @@ Update the image name in `k8s-flask-manifest/flask-deploy.yaml`, then deploy:
 kubectl apply -f k8s-flask-manifest/
 ```
 
-### 7. Test the API
+### 8. Create the Ingress Resource
 
-Open Swagger UI at `http://<node-ip>:30080/apidocs` or use curl:
+The Ingress resource tells the nginx controller how to route traffic:
+
+```yaml
+# k8s-flask-manifest/flask-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: flask-ingress
+  namespace: app
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: flask-app.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: flask-app-svc
+                port:
+                  number: 5000
+```
+
+If you already ran `kubectl apply -f k8s-flask-manifest/` in the previous step, the Ingress resource is already applied. Otherwise:
+
+```bash
+kubectl apply -f k8s-flask-manifest/flask-ingress.yaml
+```
+
+Add the hostname to your machine's hosts file:
+
+```bash
+sudo sh -c 'echo "127.0.0.1 flask-app.local" >> /etc/hosts'
+```
+
+Verify the Ingress is configured:
+
+```bash
+kubectl get ingress -n app
+```
+
+### 9. Test the API
+
+Open Swagger UI in your browser at `http://flask-app.local/apidocs` or use curl:
 
 ```bash
 # Health check
-curl http://<node-ip>:30080/health
+curl http://flask-app.local/health
 
 # Create a product
-curl -X POST http://<node-ip>:30050/api/products \
+curl -X POST http://flask-app.local/api/products \
   -H "Content-Type: application/json" \
   -d '{"name": "Laptop", "description": "Gaming laptop 16GB RAM", "price": 999.99}'
 
 # Get all products
-curl http://<node-ip>:30080/api/products
+curl http://flask-app.local/api/products
 
 # Get one product
-curl http://<node-ip>:30080/api/products/<id>
+curl http://flask-app.local/api/products/<id>
 
 # Update a product
-curl -X PUT http://<node-ip>:30080/api/products/<id> \
+curl -X PUT http://flask-app.local/api/products/<id> \
   -H "Content-Type: application/json" \
   -d '{"price": 799.99}'
 
 # Delete a product
-curl -X DELETE http://<node-ip>:30080/api/products/<id>
+curl -X DELETE http://flask-app.local/api/products/<id>
 ```
 
 ---
@@ -217,7 +308,7 @@ A Deployment treats all pods as identical and interchangeable — if one dies, a
 
 MongoDB needs three guarantees that only a StatefulSet provides:
 
-1. **Stable network identity** — Each pod gets a predictable hostname (`mongo-0`, `mongo-1`, `mongo-2`) that doesn't change across restarts. The replica set members use these hostnames to find each other. If `mongo-1` restarted and came back as `mongo-xyz`, the other member
+1. **Stable network identity** — Each pod gets a predictable hostname (`mongo-0`, `mongo-1`, `mongo-2`) that doesn't change across restarts. The replica set members use these hostnames to find each other. If `mongo-1` restarted and came back as `mongo-xyz`, the other members wouldn't recognize it.
 
 2. **Stable persistent storage** — Each pod gets its own PersistentVolumeClaim that follows it across restarts and rescheduling. If `mongo-0` is rescheduled to a different node, its data volume moves with it. In a Deployment, you'd lose the data.
 
@@ -230,9 +321,9 @@ A normal Kubernetes Service gets a single ClusterIP and load-balances traffic ac
 A headless Service (`clusterIP: None`) doesn't get a ClusterIP. Instead, it creates individual DNS records for each pod:
 
 ```
-mongo-0.mongo-svc.default.database.cluster.local
-mongo-1.mongo-svc.default.data ase.cluster.local
-mongo-2.mongo-svc.default.database.cluster.local
+mongo-0.mongo-svc.database.svc.cluster.local
+mongo-1.mongo-svc.database.svc.cluster.local
+mongo-2.mongo-svc.database.svc.cluster.local
 ```
 
 This is how the MongoDB driver can address each replica set member individually. The headless Service is the glue between Kubernetes networking and MongoDB's replica set protocol.
@@ -280,29 +371,6 @@ The InitContainer copies the keyFile from the Secret volume to an `emptyDir` vol
 
 The `emptyDir` survives after the InitContainer terminates because it's tied to the **pod's** lifecycle, not any individual container's. It's only deleted when the pod itself is deleted.
 
-
-### Overriding ENTRYPOINT and CMD with command and args
-
-Understanding what `command` and `args` do:
-
-- `command` overrides the Docker image's `ENTRYPOINT`
-- `args` overrides the Docker image's `CMD`
-
-By setting `command` to `/bin/sh -c`, we get a shell that can do `${VAR}` expansion. The shell reads the Secret values (already injected as environment variables), builds the full connection string, and then `exec node app` starts Mongo Express.
-
-
-**Caution**: Overriding `command` bypasses the original Docker image's entrypoint script. If that script does important setup (creating directories, initializing configs), you'll break things. For Mongo Express it's fine because the entrypoint simply runs `node app`. For images with complex entrypoints (like Postgres or MySQL), you should call the original entrypoint explicitly: `exec docker-entrypoint.sh mongod --args`.
-
-For the Flask app deployment, we used a cleaner approach — Kubernetes `$(VAR)` substitution:
-
-```yaml
-- name: MONGO_URI
-  value: "mongodb://$(MONGO_USER):$(MONGO_PASS)@$(MONGO_HOST)/$(MONGO_DATABASE)?replicaSet=$(MONGO_REPLICA_SET)&authSource=$(MONGO_AUTH_SOURCE)"
-```
-
-This is not shell interpolation — it's resolved by the Kubernetes API server before the container starts. `$(VAR_NAME)` references env vars defined earlier in the same spec. No shell override needed, and the original image entrypoint runs untouched.
-
-
 ### How the MongoDB Driver Routes Writes to the Primary
 
 A common question: if you list all three MongoDB nodes in the connection string, how does the driver know which one is the primary?
@@ -323,6 +391,43 @@ These are **seed nodes**, not destinations. The driver doesn't blindly send quer
 
 So the intelligence lives in the **MongoDB driver** (pymongo in our case), not in Kubernetes DNS or the Service. Kubernetes just provides the network plumbing — the driver handles routing.
 
+### Overriding ENTRYPOINT and CMD with command and args
+
+Kubernetes lets you override a Docker image's startup behavior:
+
+- `command` overrides the Docker image's `ENTRYPOINT`
+- `args` overrides the Docker image's `CMD`
+
+We use this in the MongoDB StatefulSet to pass replica set configuration flags:
+
+```yaml
+args: ["--replSet", "rs0", "--bind_ip_all", "--keyFile", "/keyfile/mongo-keyfile"]
+```
+
+The `mongo:7` image's Dockerfile has `CMD ["mongod"]`. By setting `args`, we override it so the container runs `mongod --replSet rs0 --bind_ip_all --keyFile /keyfile/mongo-keyfile`. The entrypoint script detects these are `mongod` flags and prepends `mongod` automatically.
+
+Another common pattern is overriding `command` to get a shell for runtime string interpolation:
+
+```yaml
+command: ["/bin/sh", "-c"]
+args:
+  - |
+    export CONNECTION_URL="mongodb://${DB_USER}:${DB_PASS}@host:27017"
+    exec node app
+```
+
+By setting `command` to `/bin/sh -c`, you get a shell that can do `${VAR}` expansion from environment variables. The `exec` keyword is important — it **replaces** the shell process with the application process. Without it, you'd have an unnecessary parent shell hanging around.
+
+**Caution**: Overriding `command` bypasses the original Docker image's entrypoint script. If that script does important setup (creating directories, initializing configs), you'll break things. For images with complex entrypoints (like Postgres or MySQL), call the original entrypoint explicitly: `exec docker-entrypoint.sh <command> --args`.
+
+For the Flask app deployment, we used a cleaner approach — Kubernetes `$(VAR)` substitution:
+
+```yaml
+- name: MONGO_URI
+  value: "mongodb://$(MONGO_USER):$(MONGO_PASS)@$(MONGO_HOST)/$(MONGO_DATABASE)?replicaSet=$(MONGO_REPLICA_SET)&authSource=$(MONGO_AUTH_SOURCE)"
+```
+
+This is not shell interpolation — it's resolved by the Kubernetes API server before the container starts. `$(VAR_NAME)` references env vars defined earlier in the same spec. No shell override needed, and the original image entrypoint runs untouched.
 
 ### Building the Connection String Without Hardcoding Secrets
 
@@ -390,8 +495,6 @@ def create_product():
 
 The `---` separator is critical — it tells Flasgger "YAML starts here." Without these docstrings, Swagger UI shows an empty page with no endpoints. The docstrings describe what the endpoint accepts and returns, and Flasgger turns this into the interactive documentation.
 
----
-
 ### Namespace Separation and Cross-Namespace DNS
 
 This project separates resources into two namespaces: `database` for MongoDB and `app` for the Flask API. This mirrors production environments where database and application workloads are managed independently with different access controls.
@@ -416,13 +519,47 @@ This means the ConfigMap must specify cross-namespace hostnames:
 MONGO_HOST: "mongo-0.mongo-svc.database:27017,mongo-1.mongo-svc.database:27017,mongo-2.mongo-svc.database:27017"
 ```
 
-One caveat: Kubernetes Secrets don't cross namespace boundaries. The Flask app needs MongoDB credentials, but the Secret lives in the `database` namespace. The solution is to maintain a copy of the Secret in the `app` namespace (`k8s/mongodb-secret.yaml`). In production, the External Secrets Operator eliminates this duplication by letting both namespaces pull from the same external source (like HashiCorp Vault).
+One caveat: Kubernetes Secrets don't cross namespace boundaries. The Flask app needs MongoDB credentials, but the Secret lives in the `database` namespace. The solution is to maintain a copy of the Secret in the `app` namespace. In production, the External Secrets Operator eliminates this duplication by letting both namespaces pull from the same external source (like HashiCorp Vault).
+
+### Ingress: How External Traffic Enters the Cluster
+
+Before Ingress, we used NodePort to expose the Flask app — traffic hit `localhost:30080` and was routed to the pod. This works but has limitations: ugly port numbers (30000-32767), one port per service, no hostname-based routing, and no SSL termination.
+
+Ingress solves all of these. It has two components:
+
+**Ingress Controller** — an nginx pod that acts as a reverse proxy. It's installed once per cluster and watches for Ingress resources across all namespaces. In our Kind setup, it runs on the worker node with `hostNetwork: true`, meaning it binds directly to port 80 on the node — no LoadBalancer or NodePort service needed.
+
+**Ingress Resource** — a YAML config that defines routing rules. It tells the controller "when someone requests `flask-app.local`, route traffic to the `flask-app-svc` service in the `app` namespace."
+
+The full traffic flow:
+
+```
+Browser (http://flask-app.local)
+  │
+  │  /etc/hosts resolves flask-app.local → 127.0.0.1
+  │
+  ▼
+Kind port mapping (localhost:80 → worker container:80)
+  │
+  ▼
+Nginx pod (hostNetwork, matches host: flask-app.local)
+  │
+  │  Reads Ingress resource rules
+  │
+  ▼
+ClusterIP Service (flask-app-svc:5000)
+  │
+  ▼
+Flask pod (:5000)
+```
+
+With this setup, the Flask service is a ClusterIP (internal only) instead of NodePort — no ports are directly exposed on nodes. All external traffic flows through the Ingress controller, which is the production pattern.
+
+**Why `hostNetwork` instead of LoadBalancer?** In cloud environments (AWS, GKE, AKS), the Ingress controller uses a LoadBalancer service that provisions a real external load balancer. On bare metal, MetalLB fills that role. Kind has neither, so `hostNetwork: true` is the shortcut — the pod binds directly to the node's port 80, and Kind's Docker port mapping bridges it to your Mac. The Ingress Resource YAML stays identical regardless of how the controller is exposed.
+
+**Why the manifest needed patching:** The upstream Kind manifest had `ingress-ready: "true"` as a nodeSelector (targeting the control plane). We removed the `ingress-ready` selector to let the pod schedule on the worker node (where our port mapping is), added `hostNetwork: true`, and updated the toleration to `control-plane` for Kubernetes v1.24+.
 
 ---
-
-
-
-
 
 ## CI/CD with Jenkins
 
@@ -438,14 +575,13 @@ Code Push → Jenkins detects change → Build Docker image → Push to Docker H
 2. **Push to Docker Hub** — Authenticates with Docker Hub using Jenkins credentials and pushes the image
 3. **Deploy to Kubernetes** — Runs `kubectl set image` to update the running deployment with the new image tag, then waits for the rollout to complete
 
-
 ### Key Design Decisions in the Pipeline
 
 - **Shell commands over plugins**: The pipeline uses `sh` steps (`docker build`, `docker push`, `kubectl`) instead of Jenkins-specific plugin DSL. This makes the pipeline portable — the same commands work in GitHub Actions, GitLab CI, or any CI system.
 
 - **Build number as image tag**: Each build produces a uniquely tagged image (`flask-mongo-app:1`, `flask-mongo-app:2`, etc.) instead of using `latest`. This makes deployments traceable and rollbacks trivial: `kubectl set image deployment/flask-app flask-app=image:5` to roll back to build 5.
 
-- **`kubectl set image` over `kubectl apply`**: For CI/CD, only the image tag changes between deployments. `kubectl set image` updates just the image without touching the rest of the manifest. `kubectl apply` would require modifying the YAML file first.
+- **`kubectl set image` over `kubectl apply`**: For CI/CD, only the image tag changes between deployments. `kubectl set image` updates just the image without touching the rest of the manifest. `kubectl apply` would require modifying the YAML file first. Note the `-n app` flag since the deployment lives in the `app` namespace.
 
 - **Rollout status check**: After updating the image, the pipeline runs `kubectl rollout status --timeout=60s` to wait for the new pods to be ready. If the deployment fails (crash loop, image pull error), the pipeline fails too — giving you immediate feedback.
 
@@ -475,13 +611,14 @@ Code Push → Jenkins detects change → Build Docker image → Push to Docker H
 ---
 
 
+
 ## What's Next
 
 Planned improvements to make this more production-ready:
 
-- [X] **Liveness and readiness probes** — Let Kubernetes detect unhealthy pods automatically
+- [x] **Liveness and readiness probes** — Let Kubernetes detect unhealthy pods automatically
 - [ ] **Helm charts** — Package all manifests into a reusable, configurable chart
-- [ ] **Ingress controller** — Replace NodePort with proper HTTP routing
+- [x] **Ingress controller** — Replace NodePort with proper HTTP routing
 - [x] **Namespaces** — Separate database and application workloads
 - [ ] **Resource limits** — CPU and memory requests/limits on all pods
 - [ ] **External Secrets Operator** — Fetch secrets from HashiCorp Vault or AWS Secrets Manager instead of storing them in manifests
@@ -489,7 +626,4 @@ Planned improvements to make this more production-ready:
 - [ ] **ArgoCD** — GitOps-based deployment instead of direct kubectl from CI
 
 ---
-
-## License
-
 
