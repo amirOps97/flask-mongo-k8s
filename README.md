@@ -92,7 +92,7 @@ nodes:
 kind create cluster --name flask-mongo --config kind-config.yaml
 ```
 
-> **Why port mapping on the worker?** Kind runs Kubernetes nodes as Docker containers. The Ingress controller runs on the worker node with `hostNetwork: true`, meaning it binds directly to the node's port 80. The `extraPortMappings` bridges that port from the Docker container to `localhost:80` on your Mac. Without it, port 80 inside the Kind container is unreachable from your browser.
+> **Why port mapping on the worker?** Kind runs Kubernetes nodes as Docker containers. The Ingress controller runs on the worker node with `hostNetwork: true`, meaning it binds directly to the node's port 80. The `extraPortMappings` bridges that port from the Docker container to `localhost:80` on your machine. Without it, port 80 inside the Kind container is unreachable from your browser.
 
 ### 2. Install Nginx Ingress Controller
 
