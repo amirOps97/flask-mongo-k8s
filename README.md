@@ -12,20 +12,18 @@ Built as a hands-on DevOps learning project, every design decision is documented
 ---
 
 ## Table of Contents
-
-- [Concepts Covered](#concepts-covered)
 - [Prerequisites](#prerequisites)
-- [Project Structure](#project-structure)
 - [Step-by-Step Setup Guide](#step-by-step-setup-guide)
   - [1. Create the Kubernetes Cluster](#1-create-the-kubernetes-cluster)
   - [2. Install Nginx Ingress Controller](#2-install-nginx-ingress-controller)
-  - [3. Create Namespaces](#3-create-namespaces)
-  - [4. Create Secrets](#4-create-secrets)
-  - [5. Deploy MongoDB Replica Set](#5-deploy-mongodb-replica-set)
-  - [6. Initialize the Replica Set](#6-initialize-the-replica-set)
-  - [7. Build and Deploy the Flask App](#7-build-and-deploy-the-flask-app)
-  - [8. Create the Ingress Resource](#8-create-the-ingress-resource)
-  - [9. Test the API](#9-test-the-api)
+  - [3. Install Metrics Server](#3-install-metrics-server)
+  - [4. Create Namespaces](#4-create-namespaces)
+  - [5. Create Secrets](#5-create-secrets)
+  - [6. Deploy MongoDB Replica Set](#6-deploy-mongodb-replica-set)
+  - [7. Initialize the Replica Set](#7-initialize-the-replica-set)
+  - [8. Build and Deploy the Flask App](#8-build-and-deploy-the-flask-app)
+  - [9. Create the Ingress Resource](#9-create-the-ingress-resource)
+  - [10. Test the API](#10-test-the-api)
 - [Deep Dive: Design Decisions](#deep-dive-design-decisions)
   - [Why StatefulSet for MongoDB?](#why-statefulset-for-mongodb)
   - [Headless Service and Pod DNS](#headless-service-and-pod-dns)
@@ -37,15 +35,15 @@ Built as a hands-on DevOps learning project, every design decision is documented
   - [Swagger and Flasgger: API Documentation](#swagger-and-flasgger-api-documentation)
   - [Namespace Separation and Cross-Namespace DNS](#namespace-separation-and-cross-namespace-dns)
   - [Ingress: How External Traffic Enters the Cluster](#ingress-how-external-traffic-enters-the-cluster)
+  - [Resource Management: Requests, Limits, and Autoscaling](#resource-management-requests-limits-and-autoscaling)
 - [CI/CD with Jenkins](#cicd-with-jenkins)
 - [API Endpoints](#api-endpoints)
-- [Cleanup](#cleanup)
 
 ---
 
 ## Concepts Covered
 
-- **Kubernetes**: StatefulSet, Deployment, Headless Service, ClusterIP, ConfigMap, Secret, InitContainer, Volumes (PV, PVC, Storage Class, EmptyDir), Namespaces, cross-namespace DNS, Ingress, rolling updates
+- **Kubernetes**: StatefulSet, Deployment, Headless Service, ClusterIP, ConfigMap, Secret, InitContainer, Volumes (PV, PVC, Storage Class, EmptyDir), Namespaces, HPA, resource requests/limits, cross-namespace DNS, Ingress, rolling updates
 - **MongoDB**: Replica set, primary/secondary architecture, keyFile authentication
 - **Docker**
 - **Flask**: REST API, CRUD operations, pymongo driver, Flasgger
@@ -134,7 +132,42 @@ You should see the controller pod on `flask-mongo-worker` with an IP like `172.1
 
 > **Why `hostNetwork: true`?** Normally, pods get their own IP in the pod network (10.244.x.x) and need a Service to be reachable. With `hostNetwork: true`, the pod shares the node's network namespace — port 80 on the pod IS port 80 on the node. This eliminates the need for a LoadBalancer service (which requires a cloud provider or MetalLB) and works perfectly with Kind's port mapping.
 
-### 3. Create Namespaces
+### 3. Install Metrics Server
+
+Kind doesn't include a metrics server by default. It's required for `kubectl top` and for the HorizontalPodAutoscaler to read CPU/memory usage from pods:
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+```
+
+For Kind, the metrics server needs a flag to skip TLS verification (since Kind uses self-signed certificates). Patch the deployment:
+
+```bash
+kubectl patch deployment metrics-server -n kube-system \
+  --type='json' \
+  -p='[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls"}]'
+```
+
+Wait for it to be ready:
+
+```bash
+kubectl wait --namespace kube-system \
+  --for=condition=ready pod \
+  --selector=k8s-app=metrics-server \
+  --timeout=90s
+```
+
+Verify it's working:
+
+```bash
+kubectl top nodes
+kubectl top pods -A
+```
+
+> **Why `--kubelet-insecure-tls`?** The metrics server scrapes metrics from the kubelet on each node via HTTPS. In Kind, the kubelet uses self-signed certificates that the metrics server doesn't trust by default. This flag tells it to skip TLS verification. In production clusters (EKS, GKE, AKS), proper certificates are configured and this flag is not needed.
+
+
+### 4. Create Namespaces
 
 ```bash
 kubectl create namespace database
@@ -143,7 +176,7 @@ kubectl create namespace app
 
 > **Why namespaces?** In production, you wouldn't run your database and application in the same namespace. Namespaces provide resource isolation, access control boundaries, and organizational clarity. They also let different teams manage their own resources independently.
 
-### 4. Create Secrets
+### 5. Create Secrets
 
 Create the MongoDB root credentials in both namespaces. The `database` namespace needs them for MongoDB itself, and the `app` namespace needs them for the Flask app's connection string. Kubernetes Secrets can't be shared across namespaces, so both need a copy:
 
@@ -162,7 +195,7 @@ rm mongo-keyfile
 
 > **Why a keyFile?** When MongoDB runs as a replica set with authentication enabled, the members need to prove to each other that they belong to the same cluster. The keyFile is a shared secret — every member has the same key, and they use it to authenticate inter-node communication. Without it, any rogue MongoDB instance could join your replica set.
 
-### 5. Deploy MongoDB Replica Set
+### 6. Deploy MongoDB Replica Set
 
 ```bash
 kubectl apply -f k8s-mongodb-manifest/
@@ -185,7 +218,7 @@ mongo-2   1/1     Running   0          30s
 
 > **Note:** The pods start in order — `mongo-0` first, then `mongo-1`, then `mongo-2`. This is a StatefulSet behavior. Each pod waits for the previous one to be ready before starting. This ordered startup is important for databases.
 
-### 6. Initialize the Replica Set
+### 7. Initialize the Replica Set
 
 The three MongoDB pods are running, but they don't know about each other yet. You need to tell them they're a team:
 
@@ -211,7 +244,7 @@ kubectl exec -n database -it mongo-0 -- mongosh -u admin -p password123 --eval '
 
 You should see one member as `PRIMARY` and two as `SECONDARY`.
 
-### 7. Build and Deploy the Flask App
+### 8. Build and Deploy the Flask App
 
 Build and push the Docker image:
 
@@ -226,7 +259,7 @@ Update the image name in `k8s-flask-manifest/flask-deploy.yaml`, then deploy:
 kubectl apply -f k8s-flask-manifest/
 ```
 
-### 8. Create the Ingress Resource
+### 9. Create the Ingress Resource
 
 The Ingress resource tells the nginx controller how to route traffic:
 
@@ -270,7 +303,7 @@ Verify the Ingress is configured:
 kubectl get ingress -n app
 ```
 
-### 9. Test the API
+### 10. Test the API
 
 Open Swagger UI in your browser at `http://flask-app.local/apidocs` or use curl:
 
@@ -559,6 +592,70 @@ With this setup, the Flask service is a ClusterIP (internal only) instead of Nod
 
 **Why the manifest needed patching:** The upstream Kind manifest had `ingress-ready: "true"` as a nodeSelector (targeting the control plane). We removed the `ingress-ready` selector to let the pod schedule on the worker node (where our port mapping is), added `hostNetwork: true`, and updated the toleration to `control-plane` for Kubernetes v1.24+.
 
+### Resource Management: Requests, Limits, and Autoscaling
+
+Every container in this project has resource requests and limits configured:
+
+```yaml
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+```
+
+**Requests** are the minimum guaranteed resources. The Kubernetes scheduler uses requests to decide which node to place a pod on — it won't schedule a pod on a node that doesn't have enough available capacity. If you request `100m` CPU (100 millicores, or 10% of a core), the scheduler guarantees that capacity.
+
+**Limits** are the maximum a container can use. If a container tries to exceed its CPU limit, it gets throttled (slowed down). If it exceeds its memory limit, it gets OOMKilled (terminated and restarted). Limits prevent a misbehaving container from starving other pods on the same node.
+
+**Why both?** Without requests, the scheduler has no idea how much a pod needs and might pack too many onto one node. Without limits, a single pod could consume all of a node's resources and crash everything else. Together, they provide both scheduling intelligence and runtime safety.
+
+**HorizontalPodAutoscaler (HPA)** automatically scales the Flask deployment based on observed CPU usage:
+
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: flask-app-hpa
+  namespace: app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: flask-app
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
+```
+
+This tells Kubernetes: "if average CPU across all Flask pods exceeds 50% of the **requested** CPU, add more pods. Scale between 1 and 5 replicas." With a CPU request of `100m`, the HPA triggers scaling when average usage exceeds `50m` per pod.
+
+The HPA depends on the **metrics server** to read real-time CPU and memory usage from pods. Without the metrics server installed, the HPA shows `<unknown>/50%` in its targets and never scales.
+
+**Why HPA only on Flask, not MongoDB?** HPA scales horizontally — it adds more pods. This makes sense for stateless workloads like the Flask app where any pod can handle any request. A MongoDB replica set has a fixed number of members (3) defined by `rs.initiate()`. Adding a random pod wouldn't automatically join it to the replica set. Database scaling requires a different approach — either vertical scaling (more CPU/memory per pod) or sharding.
+
+To test autoscaling, generate load and watch the HPA respond:
+
+```bash
+# In one terminal — generate traffic
+kubectl run load-test --image=busybox -n app --rm -it -- \
+  /bin/sh -c "while true; do wget -q -O- http://flask-app-svc:5000/api/products; done"
+
+# In another terminal — watch the HPA
+kubectl get hpa -n app -w
+```
+
+You should see CPU percentage climb, replica count increase, and after stopping the load test, scale back down after the cooldown period (default 5 minutes).
+
+
 ---
 
 ## CI/CD with Jenkins
@@ -620,10 +717,9 @@ Planned improvements to make this more production-ready:
 - [ ] **Helm charts** — Package all manifests into a reusable, configurable chart
 - [x] **Ingress controller** — Replace NodePort with proper HTTP routing
 - [x] **Namespaces** — Separate database and application workloads
-- [ ] **Resource limits** — CPU and memory requests/limits on all pods
+- [x] **Resource limits and HPA** — CPU/memory requests and limits on all pods, horizontal autoscaling for Flask
 - [ ] **External Secrets Operator** — Fetch secrets from HashiCorp Vault or AWS Secrets Manager instead of storing them in manifests
 - [ ] **Prometheus + Grafana** — Monitoring and alerting
 - [ ] **ArgoCD** — GitOps-based deployment instead of direct kubectl from CI
-
 ---
 
