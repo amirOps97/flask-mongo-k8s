@@ -32,6 +32,13 @@ spec:
       containers:
         - name: mongo
           image: mongo:7
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+          limits:
+               cpu: 500m
+               memory: 512Mi
           ports:
             - containerPort: 27017
           args: ["--replSet", "rs0", "--bind_ip_all", "--keyFile", "/keyfile/mongo-keyfile"]
