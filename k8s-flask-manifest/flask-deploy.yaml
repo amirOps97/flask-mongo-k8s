@@ -16,6 +16,13 @@ spec:
       containers:
         - name: flask-app
           image: amirdehdari/flask-mongo:2.1.0
+          resources:
+            requests:
+              cpu: 100m        
+              memory: 128Mi
+            limits:
+              cpu: 500m        
+              memory: 256Mi
           ports:
             - containerPort: 5000
           livenessProbe:
